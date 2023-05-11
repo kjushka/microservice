@@ -1,0 +1,13 @@
+/bin
+/.idea
+/.vscode
+#/.env
+/postgres_data
+/certbot
+/certbot/conf/
+/os_data
+/mongodb_data
+/graylog_data
+/graylog_journal
+/prometheus_data
+/grafana

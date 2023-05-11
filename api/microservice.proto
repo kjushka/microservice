@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package microservice;
+
+option go_package = "github.com/kjushka/mircoservice-template;microservicepb";
+
+import "google/api/annotations.proto";
+import "google/protobuf/empty.proto";
+
+service HTTPMicroservice {
+  rpc Welcome(google.protobuf.Empty) returns (WelcomeResponse) {
+    option (google.api.http) = {
+      get: "/welcome"
+    };
+  }
+}
+
+message WelcomeRequest {
+  string message = 1;
+}
+
+message WelcomeResponse {
+  string message = 1;
+}

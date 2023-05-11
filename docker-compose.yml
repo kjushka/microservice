@@ -1,0 +1,196 @@
+version: "3.9"
+
+services:
+  microservice:
+    container_name: microservice
+    hostname: backend
+    image: imigaka/microservice:latest
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      #PGS
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_USER=postgres
+      - PG_PASS=postgres
+      - PG_DATABASE=microservice
+      - PG_TIMEOUT=200ms
+      - PG_SHARDS_COUNT=128
+
+      #REDIS
+      - REDIS_PORT=6379
+      - REDIS_TIMEOUT=200ms
+      - REDIS_EXPIRATION_TIME=24h
+
+       #RATELIMITER
+      - RATE_LIMITER_CAPACITY=100
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+      - "8090:8090"
+    user: root
+    restart: always
+    logging:
+      driver: gelf
+      options:
+        gelf-address: "udp://localhost:12201"
+        tag: "microservice"
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.38
+    ports:
+      - 5775:5775/udp # accept zipkin.thrift over compact thrift protocol
+      - 6831:6831/udp # accept jaeger.thrift over compact thrift protocol
+      - 6832:6832/udp # accept jaeger.thrift over binary thrift protocol
+      - 5778:5778 # serve configs
+      - 16686:16686 # serve frontend
+      - 14268:14268 # accept jaeger.thrift directly from clients
+
+  redis:
+    container_name: redis
+    hostname: redis
+    image: redis:4-alpine
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+      - REDIS_REPLICATION_MODE=master
+    restart: always
+
+  postgres:
+    container_name: postgres
+    image: postgres:14-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 10s
+      retries: 5
+    restart: always
+
+#  nginx:
+#    image: nginx:alpine
+#    hostname: nginx
+#    container_name: nginx
+#    restart: unless-stopped
+#    tty: true
+#    ports:
+#      - "80:80"
+#      - "443:443"
+#    depends_on:
+#      - microservice
+#    volumes:
+#      - ./nginx/app.conf:/etc/nginx/conf.d/default.conf
+#      - ./certbot:/var/www/certbot/:ro
+#      - ./certbot/conf/:/etc/nginx/ssl/:ro
+
+  certbot:
+    image: certbot/certbot:latest
+    volumes:
+      - ./certbot:/var/www/certbot/:rw
+      - ./certbot/conf/:/etc/letsencrypt/:rw
+
+  mongodb:
+    image: "mongo:5.0"
+    volumes:
+      - "./mongodb_data:/data/db"
+    restart: "on-failure"
+
+  opensearch:
+    image: "opensearchproject/opensearch:2.4.0"
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      - "bootstrap.memory_lock=true"
+      - "discovery.type=single-node"
+      - "action.auto_create_index=false"
+      - "plugins.security.ssl.http.enabled=false"
+      - "plugins.security.disabled=true"
+    ulimits:
+      memlock:
+        hard: -1
+        soft: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - "./os_data:/usr/share/opensearch/data"
+    restart: "on-failure"
+
+  graylog:
+    hostname: "server"
+    image: "${GRAYLOG_IMAGE:-graylog/graylog:5.0}"
+    depends_on:
+      - opensearch
+      - mongodb
+    entrypoint: "/usr/bin/tini -- wait-for-it opensearch:9200 --  /docker-entrypoint.sh"
+    environment:
+      GRAYLOG_NODE_ID_FILE: "/usr/share/graylog/data/config/node-id"
+      GRAYLOG_PASSWORD_SECRET: "${GRAYLOG_PASSWORD_SECRET:?Please configure GRAYLOG_PASSWORD_SECRET in the .env file}"
+      GRAYLOG_ROOT_PASSWORD_SHA2: "${GRAYLOG_ROOT_PASSWORD_SHA2:?Please configure GRAYLOG_ROOT_PASSWORD_SHA2 in the .env file}"
+      GRAYLOG_HTTP_BIND_ADDRESS: "0.0.0.0:9000"
+      GRAYLOG_HTTP_EXTERNAL_URI: "http://localhost:9000/"
+      GRAYLOG_ELASTICSEARCH_HOSTS: "http://opensearch:9200"
+      GRAYLOG_MONGODB_URI: "mongodb://mongodb:27017/graylog"
+    ports:
+      - "5044:5044/tcp"   # Beats
+      - "5140:5140/udp"   # Syslog
+      - "5140:5140/tcp"   # Syslog
+      - "5555:5555/tcp"   # RAW TCP
+      - "5555:5555/udp"   # RAW TCP
+      - "9000:9000/tcp"   # Server API
+      - "12201:12201/tcp" # GELF TCP
+      - "12201:12201/udp" # GELF UDP
+      #- "10000:10000/tcp" # Custom TCP port
+      #- "10000:10000/udp" # Custom UDP port
+      - "13301:13301/tcp" # Forwarder data
+      - "13302:13302/tcp" # Forwarder config
+    volumes:
+      - "./graylog_data:/usr/share/graylog/data/data"
+      - "./graylog_journal:/usr/share/graylog/data/journal"
+    restart: "on-failure"
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus:/etc/prometheus/
+      - ./prometheus_data:/prometheus
+    container_name: prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    depends_on:
+      - microservice
+    hostname: prometheus
+    ports:
+      - "9090:9090"
+    restart: always
+    environment:
+      TZ: "Europe/Moscow"
+
+  grafana:
+    image: grafana/grafana
+    user: root
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana:/var/lib/grafana
+      - ./grafana/provisioning/:/etc/grafana/provisioning/
+    container_name: grafana
+    hostname: grafana
+    restart: always
+    environment:
+      TZ: "Europe/Moscow"
