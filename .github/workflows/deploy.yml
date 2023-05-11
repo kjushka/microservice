@@ -4,42 +4,39 @@ on:
     branches: [ "main" ]
 jobs:
   backend-lint:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go: [ 1.19 ]
-        os: [ macos-latest ]
+    runs-on: macos-latest
     name: backend-lint
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-go@v4
         with:
-          go-version: ${{ matrix.go }}
-          cache: false
+          go-version: 1.19
+      - run: |
+          go get ./...
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v3
         with:
           version: latest
-          working-directory: back
+          working-directory: ./.
           args: --issues-exit-code=0
           skip-cache: true
           skip-pkg-cache: true
           skip-build-cache: true
 
   backend-build:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     needs:
       - backend-lint
     steps:
       - name: Checkout
         uses: actions/checkout@v3
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v4
         with:
           go-version: 1.19
       - run: go mod download
       - name: Build
-        run: go build ./cmd/microservice
+        run: GOOS=linux go build ./cmd/microservice
       - name: Test
         run: go test -v ./...
 
